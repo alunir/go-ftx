@@ -225,6 +225,8 @@ func Connect(ctx context.Context, ch chan Response, channels, symbols []string, 
 				}
 
 			case "orderbook":
+				// MEMO: 'Action' determines the received data as a snapshot or a diff-snapshot.
+				// see; https://docs.ftx.com/#orderbooks
 				res.Type = ORDERBOOK
 				if err := json.Unmarshal(data, &res.Orderbook); err != nil {
 					l.Printf("[WARN]: cant unmarshal orderbook %+v", err)
