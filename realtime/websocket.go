@@ -17,6 +17,7 @@ import (
 	"github.com/alunir/go-ftx/types"
 	"github.com/buger/jsonparser"
 	"github.com/gorilla/websocket"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -247,10 +248,10 @@ RECONNECT:
 
 			ch <- res
 		}
-	}()
+	})
 
 	if err := eg.Wait(); err != nil {
-		log.Errorf("%v", err)
+		log.Printf("%v", err)
 	}
 
 	goto RECONNECT
@@ -283,7 +284,6 @@ RECONNECT:
 		defer conn.Close()
 		defer unsubscribe(conn, channels, nil)
 
-	RESTART:
 		for {
 			var res Response
 			_, msg, err := conn.ReadMessage()
@@ -292,7 +292,7 @@ RECONNECT:
 				res.Type = ERROR
 				res.Results = fmt.Errorf("%v", err)
 				ch <- res
-				break RESTART
+				return fmt.Errorf("can't receive error: %v", err)
 			}
 
 			typeMsg, err := jsonparser.GetString(msg, "type")
@@ -301,7 +301,7 @@ RECONNECT:
 				res.Type = ERROR
 				res.Results = fmt.Errorf("%v", string(msg))
 				ch <- res
-				break RESTART
+				continue
 			}
 
 			channel, err := jsonparser.GetString(msg, "channel")
@@ -310,7 +310,7 @@ RECONNECT:
 				res.Type = ERROR
 				res.Results = fmt.Errorf("%v", string(msg))
 				ch <- res
-				break RESTART
+				continue
 			}
 
 			data, _, _, err := jsonparser.Get(msg, "data")
@@ -324,7 +324,7 @@ RECONNECT:
 					res.Type = ERROR
 					res.Results = err
 					ch <- res
-					break RESTART
+					continue
 				}
 			}
 
@@ -351,10 +351,10 @@ RECONNECT:
 
 			ch <- res
 		}
-	}()
+	})
 
 	if err := eg.Wait(); err != nil {
-		log.Errorf("%v", err)
+		log.Printf("%v", err)
 	}
 
 	goto RECONNECT
