@@ -137,23 +137,24 @@ func Connect(ctx context.Context, ch chan Response, channels, symbols []string, 
 		l = log.New(os.Stdout, "ftx websocket", log.Llongfile)
 	}
 
+RECONNECT:
 	conn, _, err := websocket.DefaultDialer.Dial("wss://ftx.com/ws/", nil)
 	if err != nil {
-		return err
+		log.Fatal(err)
 	}
 
 	if err := subscribe(conn, channels, symbols); err != nil {
-		return err
+		log.Fatal(err)
 	}
 
 	// ping each 15sec for exchange
 	go ping(conn)
 
-	go func() {
+	var eg errgroup.Group
+	eg.Go(func() error {
 		defer conn.Close()
 		defer unsubscribe(conn, channels, symbols)
 
-	RESTART:
 		for {
 			var res Response
 			_, msg, err := conn.ReadMessage()
@@ -162,7 +163,7 @@ func Connect(ctx context.Context, ch chan Response, channels, symbols []string, 
 				res.Type = ERROR
 				res.Results = fmt.Errorf("%v", err)
 				ch <- res
-				break RESTART
+				return fmt.Errorf("can't receive error: %v", err)
 			}
 
 			typeMsg, err := jsonparser.GetString(msg, "type")
@@ -171,7 +172,7 @@ func Connect(ctx context.Context, ch chan Response, channels, symbols []string, 
 				res.Type = ERROR
 				res.Results = fmt.Errorf("%v", string(msg))
 				ch <- res
-				break RESTART
+				continue
 			}
 
 			channel, err := jsonparser.GetString(msg, "channel")
@@ -180,7 +181,7 @@ func Connect(ctx context.Context, ch chan Response, channels, symbols []string, 
 				res.Type = ERROR
 				res.Results = fmt.Errorf("%v", string(msg))
 				ch <- res
-				break RESTART
+				continue
 			}
 
 			market, err := jsonparser.GetString(msg, "market")
@@ -189,7 +190,7 @@ func Connect(ctx context.Context, ch chan Response, channels, symbols []string, 
 				res.Type = ERROR
 				res.Results = fmt.Errorf("%v", string(msg))
 				ch <- res
-				break RESTART
+				continue
 			}
 
 			res.Symbol = market
@@ -205,7 +206,7 @@ func Connect(ctx context.Context, ch chan Response, channels, symbols []string, 
 					res.Type = ERROR
 					res.Results = err
 					ch <- res
-					break RESTART
+					continue
 				}
 			}
 
@@ -238,36 +239,47 @@ func Connect(ctx context.Context, ch chan Response, channels, symbols []string, 
 				res.Results = fmt.Errorf("%v", string(msg))
 			}
 
-			ch <- res
+			select { // 外部からの停止
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
 
+			ch <- res
 		}
 	}()
 
-	return nil
+	if err := eg.Wait(); err != nil {
+		log.Errorf("%v", err)
+	}
+
+	goto RECONNECT
 }
 
-func ConnectForPrivate(ctx context.Context, ch chan Response, key, secret string, channels []string, l *log.Logger, subaccount ...string) error {
+func ConnectForPrivate(ctx context.Context, ch chan Response, key, secret string, channels []string, l *log.Logger, subaccount ...string) {
 	if l == nil {
 		l = log.New(os.Stdout, "ftx websocket", log.Llongfile)
 	}
 
+RECONNECT:
 	conn, _, err := websocket.DefaultDialer.Dial("wss://ftx.com/ws/", nil)
 	if err != nil {
-		return err
+		log.Fatal(err)
 	}
 
 	// sign up
 	if err := signature(conn, key, secret, subaccount); err != nil {
-		return err
+		log.Fatal(err)
 	}
 
 	if err := subscribe(conn, channels, nil); err != nil {
-		return err
+		log.Fatal(err)
 	}
 
 	go ping(conn)
 
-	go func() {
+	var eg errgroup.Group
+	eg.Go(func() error {
 		defer conn.Close()
 		defer unsubscribe(conn, channels, nil)
 
@@ -341,7 +353,11 @@ func ConnectForPrivate(ctx context.Context, ch chan Response, key, secret string
 		}
 	}()
 
-	return nil
+	if err := eg.Wait(); err != nil {
+		log.Errorf("%v", err)
+	}
+
+	goto RECONNECT
 }
 
 func signature(conn *websocket.Conn, key, secret string, subaccount []string) error {
